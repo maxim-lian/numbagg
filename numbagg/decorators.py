@@ -44,6 +44,7 @@ class NumbaNDReduce(object):
                                         'float64(float64)')):
         self.func = func
         self.signature = signature
+        self._jit_cache = FunctionCache(self._create_jit)
         self._gufunc_cache = FunctionCache(self._create_gufunc)
 
     @property
@@ -57,25 +58,46 @@ class NumbaNDReduce(object):
     def transformed_func(self):
         return _transform_agg_source(self.func)
 
-    @cached_property
-    def _jit_func(self):
-        vectorize = numba.jit(self.signature, nopython=True)
+    def _parsed_signature(self, core_ndim):
+        colons = ','.join(':' for _ in range(core_ndim))
+        colons = '[%s]' % colons if colons else ''
+        for signature in self.signature:
+            match = re.match('^(\w+)\((\w+)\)$', signature)
+            if not match:
+                raise ValueError('invalid signature')
+            out_dtype, in_dtype = match.groups()
+            yield colons, in_dtype, out_dtype
+
+
+        # colons = ','.join(':' for _ in range(max(core_ndim, 1)))
+
+        # def parse_sig(signature):
+        #     match = re.match('^(\w+)\((\w+)\)$', signature)
+        #     if not match:
+        #         raise ValueError('invalid signature')
+        #     out_dtype, in_dtype = match.groups()
+        #     return '%s[%s]' % (in_dtype, colons), out_dtype
+
+        # return [parse_sig(sig) for sig in self.signature]
+
+    def _create_jit(self, core_ndim):
+        numba_sig = ['%s(%s%s)' % (out_dtype, in_dtype, colons)
+                     for colons, in_dtype, out_dtype
+                     in self._parsed_signature(core_ndim)]
+        vectorize = numba.jit(numba_sig, nopython=True, nogil=True)
         return vectorize(self.func)
 
     def _create_gufunc(self, core_ndim):
         # creating compiling gufunc has some significant overhead (~130ms per
         # function and number of dimensions to aggregate), so do this in a
         # lazy fashion
-        colons = ','.join(':' for _ in range(core_ndim))
-
-        numba_sig = []
-        for signature in self.signature:
-            match = re.match('^(\w+)\((\w+)\)$', signature)
-            if not match:
-                raise ValueError('invalid signature')
-            out_dtype, in_dtype = match.groups()
-            numba_sig.append('void(%s[%s], %s[:])'
-                             % (in_dtype, colons, out_dtype))
+        numba_sig = ['void(%s%s, %s[:])' % (in_dtype,
+                                            colons if colons else '[:]',
+                                            out_dtype)
+                     for colons, in_dtype, out_dtype
+                     in self._parsed_signature(core_ndim)]
+        # parsed_signature = self._parse_signature(core_ndim)
+        # numba_sig = ['void(%s, %s[:])' % args for args in parsed_signature]
 
         gufunc_sig = '(%s)->()' % ','.join(list('abcdefgijk')[:core_ndim])
         vectorize = numba.guvectorize(numba_sig, gufunc_sig, nopython=True)
@@ -87,7 +109,7 @@ class NumbaNDReduce(object):
             # returns the right dtype
             # see: https://github.com/numba/numba/issues/1087
             # f = self._jit_func
-            f = self._gufunc_cache[arr.ndim]
+            f = self._jit_cache[arr.ndim]
         elif np.isscalar(axis):
             axis = _validate_axis(axis, arr.ndim)
             all_axes = [n for n in range(arr.ndim) if n != axis] + [axis]

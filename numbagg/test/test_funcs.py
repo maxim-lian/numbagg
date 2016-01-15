@@ -1,3 +1,5 @@
+import warnings
+
 import numbagg
 
 import bottleneck as bn
@@ -11,7 +13,6 @@ def arrays(dtypes=numbagg.dtypes, nans=True):
     "Iterator that yields arrays to use for unit testing."
     ss = {}
     ss[0] = {'size':  0, 'shapes': [(0,), (0, 0), (2, 0), (2, 0, 1)]}
-    # ss[0] = {'size':  0, 'shapes': [(0,), (0, 0)]}
     ss[1] = {'size':  4, 'shapes': [(4,)]}
     ss[2] = {'size':  6, 'shapes': [(1, 6), (2, 3)]}
     ss[3] = {'size':  6, 'shapes': [(1, 2, 3)]}
@@ -44,49 +45,44 @@ def arrays(dtypes=numbagg.dtypes, nans=True):
         a = np.vstack((a, a))
         yield a
         yield a.reshape(1, 2, 4)
+    # check 0d input
+    yield np.array(-9)
+    yield np.array(0)
+    yield np.array(9)
+    yield np.array(-9.0)
+    yield np.array(0.0)
+    yield np.array(9.0)
+    yield np.array(-np.inf)
+    yield np.array(np.inf)
+    yield np.array(np.nan)
 
 
-def unit_maker(func, func0, decimal=np.inf, nans=True):
+def unit_maker(func, func0, decimal=np.inf, nans=True, check_dtype=True):
     "Test that bn.xxx gives the same output as bn.slow.xxx."
     msg = '\nfunc %s | input %s (%s) | shape %s | axis %s\n'
     msg += '\nInput array:\n%s\n'
     for i, arr in enumerate(arrays(nans=nans)):
         for axis in list(range(-arr.ndim, arr.ndim)) + [None]:
             with np.errstate(invalid='ignore'):
-                desiredraised = False
-                try:
-                    desired = func0(arr.copy(), axis=axis)
-                except Exception as err:
-                    desired = str(err)
-                    desiredraised = True
                 actualraised = False
                 try:
-                    actual = func(arr.copy(), axis=axis)
-                except Exception as err:
-                    if not desiredraised:
-                        raise
-                    actual = str(err)
+                    with warnings.catch_warnings():
+                        warnings.simplefilter("ignore")
+                        actual = func(arr.copy(), axis=axis)
+                except Exception as e:
                     actualraised = True
+                    actual = str(e)
+                desiredraised = False
+                try:
+                    with warnings.catch_warnings():
+                        warnings.simplefilter("ignore")
+                        desired = func0(arr.copy(), axis=axis)
+                except Exception as e:
+                    desiredraised = True
+                    desired = str(e)
             if actualraised and desiredraised:
                 pass
             else:
-                actual = np.asarray(actual)
-                desired = np.asarray(desired)
-
-                if desiredraised:
-                    # unlike bottleneck, numbagg cannot raise on invalid data,
-                    # so check for sentinel values instead
-                    if np.issubdtype(actual.dtype, np.dtype(int)):
-                        fill_value = -1
-                    else:
-                        fill_value = np.nan
-                    desired = np.empty(actual.shape, actual.dtype)
-                    all_missing = np.asarray(numbagg.allnan(arr, axis=axis))
-                    desired[all_missing] = fill_value
-                    # for now, assume the non-missing values are calculated
-                    # correctly
-                    desired[~all_missing] = actual[~all_missing]
-
                 tup = (func.__name__, 'a'+str(i), str(arr.dtype),
                        str(arr.shape), str(axis), arr)
                 err_msg = msg % tup
@@ -95,11 +91,69 @@ def unit_maker(func, func0, decimal=np.inf, nans=True):
                                               err_msg)
                 else:
                     assert_array_equal(actual, desired, err_msg)
-
                 err_msg += '\n dtype mismatch %s %s'
-                da = actual.dtype
-                dd = desired.dtype
-                assert_equal(da, dd, err_msg % (da, dd))
+                if check_dtype:
+                    if hasattr(actual, 'dtype') and hasattr(desired, 'dtype'):
+                        da = actual.dtype
+                        dd = desired.dtype
+                        assert_equal(da, dd, err_msg % (da, dd))
+
+# def unit_maker(func, func0, decimal=np.inf, nans=True, check_dtype=True):
+#     "Test that bn.xxx gives the same output as bn.slow.xxx."
+#     msg = '\nfunc %s | input %s (%s) | shape %s | axis %s\n'
+#     msg += '\nInput array:\n%s\n'
+#     for i, arr in enumerate(arrays(nans=nans)):
+#         for axis in list(range(-arr.ndim, arr.ndim)) + [None]:
+#             with np.errstate(invalid='ignore'):
+#                 desiredraised = False
+#                 try:
+#                     desired = func0(arr.copy(), axis=axis)
+#                 except Exception as err:
+#                     desired = str(err)
+#                     desiredraised = True
+#                 actualraised = False
+#                 try:
+#                     actual = func(arr.copy(), axis=axis)
+#                 except Exception as err:
+#                     if not desiredraised:
+#                         raise
+#                     actual = str(err)
+#                     actualraised = True
+#             if actualraised and desiredraised:
+#                 pass
+#             else:
+#                 if desiredraised:
+#                     actual = np.asarray(actual)
+#                     desired = np.asarray(desired)
+
+#                     # unlike bottleneck, numbagg cannot raise on invalid data,
+#                     # so check for sentinel values instead
+#                     if np.issubdtype(actual.dtype, np.dtype(int)):
+#                         fill_value = -1
+#                     else:
+#                         fill_value = np.nan
+#                     desired = np.empty(actual.shape, actual.dtype)
+#                     all_missing = np.asarray(numbagg.allnan(arr, axis=axis))
+#                     desired[all_missing] = fill_value
+#                     # for now, assume the non-missing values are calculated
+#                     # correctly
+#                     desired[~all_missing] = actual[~all_missing]
+
+#                 tup = (func.__name__, 'a'+str(i), str(arr.dtype),
+#                        str(arr.shape), str(axis), arr)
+#                 err_msg = msg % tup
+#                 if (decimal < np.inf) and (np.isfinite(arr).sum() > 0):
+#                     assert_array_almost_equal(actual, desired, decimal,
+#                                               err_msg)
+#                 else:
+#                     assert_array_equal(actual, desired, err_msg)
+
+#                 err_msg += '\n dtype mismatch %s %s'
+#                 if check_dtype:
+#                     if hasattr(actual, 'dtype') and hasattr(desired, 'dtype'):
+#                         da = actual.dtype
+#                         dd = desired.dtype
+#                         assert_equal(da, dd, err_msg % (da, dd))
 
 
 def slow_count(x, axis=None):
@@ -108,6 +162,8 @@ def slow_count(x, axis=None):
 
 def test_all():
     # TODO: test tuple axes
+    yield unit_maker, numbagg.median, np.median, np.inf, False
+    yield unit_maker, numbagg.nanmedian, np.nanmedian
     yield unit_maker, numbagg.nansum, np.nansum
     yield unit_maker, numbagg.nanmax, np.nanmax
     yield unit_maker, numbagg.nanargmin, np.nanargmin

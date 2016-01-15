@@ -41,6 +41,7 @@ def _transform_agg_source(func):
         def __sub__gufunc(x, __out):
             ...
             __out[0] = foo
+            return
 
     which is the form numba needs for writing a gufunc that returns a scalar
     value.
@@ -51,7 +52,8 @@ def _transform_agg_source(func):
         source = re.sub(
             r'^@ndreduce[^\n]*\ndef\s+[a-zA-Z_][a-zA-Z_0-9]*\((.*?)\)\:',
             r'def __transformed_func(\1, __out):', source, flags=re.DOTALL)
-        source = re.sub(r'return\s+(.*)', r'__out[0] = \1', source)
+        source = re.sub(r'(\s+)return\s+(.*)',
+                        r'\1__out[0] = \2\n\1return', source)
         return source
     return _apply_source_transform(func, transform_source)
 
