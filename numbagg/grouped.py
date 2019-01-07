@@ -7,13 +7,15 @@ from .decorators import groupndreduce
 
 
 def group_wrapper(func):
-    @groupndreduce([
-        (float64, int64, float64),
-        (float64, int32, float64),
-        (float32, int64, float32),
-        (float32, int32, float32),
-    ])
-    def group_func(values, labels,  out):
+    @groupndreduce(
+        [
+            (float64, int64, float64),
+            (float64, int32, float64),
+            (float32, int64, float32),
+            (float32, int32, float32),
+        ]
+    )
+    def group_func(values, labels, out):
         labels = labels.ravel()
         values = values.ravel()
         grouped = []
